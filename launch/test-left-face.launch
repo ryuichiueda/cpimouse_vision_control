@@ -1,0 +1,7 @@
+<launch>
+  <include file="$(find raspimouse_ros_2)/launch/raspimouse.launch" /> 
+  <node pkg="rosbag" type="play" name="player" output="screen"
+    args="$(find cpimouse_vision_control)/bagfiles/face-left.bag" required="true" />
+  <node pkg="cpimouse_vision_control" name="face_to_face" type="face_to_face" output="screen" />
+  <test test-name="test_face_to_face" pkg="cpimouse_vision_control" type="test_face_to_face" args="left" />
+</launch>
