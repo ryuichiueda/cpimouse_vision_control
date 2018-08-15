@@ -1,10 +1,96 @@
 #include "ros/ros.h"
 #include <ros/package.h>
+#include <cv_bridge/cv_bridge.h>
+#include "sensor_msgs/Image.h"
+#include "geometry_msgs/Twist.h"
+#include "std_srvs/Trigger.h"
+#include "signal.h"
+#include <string>
+#include <vector>
+#include <opencv2/objdetect/objdetect.hpp>
+/*
+#include <opencv2/imgproc/imgproc.hpp>
+   #include <opencv2/highgui/highgui.hpp>
+   */
 using namespace ros;
 
-int main(int argc, char const* argv[])
+cv_bridge::CvImagePtr img_org = NULL;
+
+void onSigint(int sig)
 {
-	return 0;
+	std_srvs::Trigger trigger;
+	service::call("/motor_off", trigger);
+	shutdown();
+}
+
+void callback(const sensor_msgs::Image::ConstPtr& msg)
+{
+	try{
+		img_org = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+	}catch (...){
+		img_org = NULL;
+	}
+}
+
+void one_step(Subscriber *sub, Publisher *pub)
+{
+	if(img_org == NULL)
+		return;
+
+	auto org = img_org;
+	cv_bridge::CvImagePtr gimg;
+	cv::cvtColor(org->image,gimg->image,CV_BGR2GRAY);
+	cv::CascadeClassifier cascade("/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml");
+
+	std::vector<cv::Rect> faces;
+	cascade.detectMultiScale(gimg->image,faces,1.1,1,CV_HAAR_FIND_BIGGEST_OBJECT);
+
+	if(faces.size() == 0){
+		pub->publish(org->toImageMsg());
+		return;
+	}
+
+	auto r = faces[0];
+	cv::rectangle(org->image,cv::Point(r.x, r.y),
+			cv::Point(r.x+r.width, r.y+r.height), cv::Scalar(0,255,255),3);
+	pub->publish(org->toImageMsg());
+
+	double wid = (double)org->image.cols/2;
+	double pos_x_rate = (r.x + r.width/2 - wid)/wid;
+	double rot = -pos_x_rate*3.141592/4;
+	ROS_INFO("detected %f",rot);
+
+	geometry_msgs::Twist tw;
+	tw.linear.x = 0.0;
+	tw.angular.z = rot;
+
+	pub->publish(tw);
+
+	return;
+}
+
+int main(int argc, char **argv)
+{
+	init(argc,argv,"face_to_face");
+	NodeHandle n("~");
+
+	Publisher pub = n.advertise<sensor_msgs::Image>("/face",1);
+	Subscriber sub = n.subscribe("/cv_camera/image_raw", 1, callback);
+
+	service::waitForService("/motor_on");
+	service::waitForService("/motor_off");
+
+	signal(SIGINT, onSigint);
+
+	int freq = 10;
+	Rate loop_rate(freq);
+	unsigned int c = 0;
+	while(ok()){
+		one_step(&sub, &pub);
+		spinOnce();
+		loop_rate.sleep();
+	}
+	exit(0);
 }
 
 /*
